@@ -1,485 +1,518 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { CheckCircle2, Calculator, Lock, Unlock, AlertCircle, Loader2 } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Plus, Trash2, Loader2, CheckCircle2, Clock } from 'lucide-react'
 import { StarRating } from '@/components/record/StarRating'
-import { VoiceInput } from '@/components/record/VoiceInput'
-import { useSchedules } from '@/lib/scheduleContext'
-import { fetchRecordByScheduleId, upsertRecord } from '@/lib/api/records'
-import { MealType, MenuCategory, MENU_CATEGORIES, Schedule } from '@/lib/types'
-import { toDateString, getWeekDates } from '@/lib/utils'
+import {
+  fetchMenuItemsByDate,
+  insertMenuItem,
+  updateMenuItemTimes,
+  updateMenuItemComment,
+  deleteMenuItem,
+} from '@/lib/api/menuItems'
+import { insertOoda } from '@/lib/api/ooda'
+import type { MenuItem, MealType } from '@/lib/types'
+import { MEAL_TYPES } from '@/lib/types'
+import { toDateString, sortMenuItems } from '@/lib/utils'
 
-const MEAL_TYPES: MealType[] = ['朝食', '昼食', '夕食']
-
-const SCORE_LABELS = [
-  { key: 'prep',    label: '仕込み',   desc: '下ごしらえ・準備作業' },
-  { key: 'measure', label: '計量',     desc: '食材計量作業' },
-  { key: 'cook',    label: '調理',     desc: '加熱・調理作業' },
-  { key: 'serve',   label: '盛り付け', desc: '盛り付け・配膳作業' },
-] as const
-
-type ScoreKey = typeof SCORE_LABELS[number]['key']
+// ─── 定数 ─────────────────────────────────────────────────────────────────
 
 const MINUTES_PER_STAR = 5
+const DEBOUNCE_MS      = 600
 
-function calcAutoTime(scores: Record<ScoreKey, number>): number {
-  return (scores.prep + scores.measure + scores.cook + scores.serve) * MINUTES_PER_STAR
+// カテゴリ別ヘッダーカラー（背景 + テキスト + ボーダー）
+const CATEGORY_HEADER: Record<string, { bg: string; text: string; border: string; badge: string }> = {
+  '主食':    { bg: 'bg-amber-500',  text: 'text-white',      border: 'border-amber-500',  badge: 'bg-amber-100 text-amber-800' },
+  '主菜':    { bg: 'bg-red-500',    text: 'text-white',      border: 'border-red-500',    badge: 'bg-red-100 text-red-800'   },
+  '副菜':    { bg: 'bg-green-600',  text: 'text-white',      border: 'border-green-600',  badge: 'bg-green-100 text-green-800' },
+  '汁物':    { bg: 'bg-blue-500',   text: 'text-white',      border: 'border-blue-500',   badge: 'bg-blue-100 text-blue-800'  },
+  'デザート': { bg: 'bg-pink-500',   text: 'text-white',      border: 'border-pink-500',   badge: 'bg-pink-100 text-pink-800'  },
+}
+const DEFAULT_HEADER = { bg: 'bg-slate-600', text: 'text-white', border: 'border-slate-600', badge: 'bg-slate-100 text-slate-700' }
+
+function getCategoryHeader(category: string) {
+  return CATEGORY_HEADER[category] ?? DEFAULT_HEADER
 }
 
-const INITIAL_SCORES: Record<ScoreKey, number> = { prep: 0, measure: 0, cook: 0, serve: 0 }
+const SCORE_LABELS = [
+  { key: 'prep_time'    as const, label: '仕込み',   desc: '下ごしらえ・準備作業' },
+  { key: 'measure_time' as const, label: '計量',     desc: '食材計量作業' },
+  { key: 'cook_time'    as const, label: '調理',     desc: '加熱・調理作業' },
+  { key: 'serve_time'   as const, label: '盛り付け', desc: '盛り付け・配膳作業' },
+]
 
-interface FormState {
-  date: string
-  meal_type: MealType
-  schedule_id: string
-  useFixedTime: boolean
-  scores: Record<ScoreKey, number>
-  total_time: string
-  timeIsManual: boolean
-  note: string
+type TimeKey = 'prep_time' | 'measure_time' | 'cook_time' | 'serve_time'
+
+type SaveStatus = 'idle' | 'saving' | 'saved'
+
+function totalMinutes(item: MenuItem): number {
+  return item.prep_time + item.measure_time + item.cook_time + item.serve_time
 }
 
-const CATEGORY_STYLE: Partial<Record<MenuCategory, string>> = {
-  '主食':     'bg-sky-100 text-sky-700 border-sky-200',
-  '主菜':     'bg-orange-100 text-orange-700 border-orange-200',
-  '副菜':     'bg-green-100 text-green-700 border-green-200',
-  '汁物':     'bg-amber-100 text-amber-700 border-amber-200',
-  'デザート': 'bg-pink-100 text-pink-700 border-pink-200',
+// ─── メニュー行コンポーネント ──────────────────────────────────────────────
+
+function MenuItemRow({
+  item,
+  onTimeChange,
+  onDelete,
+  onCommentChange,
+  saveStatus,
+  commentStatus,
+}: {
+  item:            MenuItem
+  onTimeChange:    (id: string, key: TimeKey, minutes: number) => void
+  onDelete:        (id: string) => void
+  onCommentChange: (id: string, comment: string) => void
+  saveStatus:      SaveStatus
+  commentStatus:   SaveStatus
+}) {
+  const [oodaStatus, setOodaStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
+
+  const total  = totalMinutes(item)
+  const colors = getCategoryHeader(item.category)
+
+  const handleRegisterOoda = async () => {
+    if (!item.comment.trim() || oodaStatus !== 'idle') return
+    setOodaStatus('sending')
+    try {
+      await insertOoda({
+        menu_item_id: item.id,
+        title:        `[${item.menu_name}] の改善メモ`,
+        content:      item.comment,
+        category:     '献立',
+        status:       'Observe',
+      })
+      setOodaStatus('done')
+    } catch {
+      setOodaStatus('error')
+      setTimeout(() => setOodaStatus('idle'), 3000)
+    }
+  }
+
+  return (
+    <div className={`rounded-2xl border-2 ${colors.border} shadow-sm overflow-hidden`}>
+      {/* カラーヘッダー：メニュー名を大きく強調 */}
+      <div className={`${colors.bg} px-4 py-3 flex items-center justify-between gap-2`}>
+        <div className="flex-1 min-w-0">
+          <p className={`text-xl font-bold leading-snug ${colors.text}`}>
+            {item.menu_name}
+          </p>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            {item.category && (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${colors.badge}`}>
+                {item.category}
+              </span>
+            )}
+            <span className="flex items-center gap-1 text-xs text-white/80">
+              <Clock className="w-3 h-3" />
+              合計 <span className="font-bold">{total} 分</span>
+            </span>
+            {item.tags.length > 0 && item.tags.map(tag => (
+              <span key={tag} className="text-xs px-1.5 py-0.5 rounded-full bg-white/20 text-white/90">
+                {tag}
+              </span>
+            ))}
+            {saveStatus === 'saving' && (
+              <span className="text-xs text-white/70 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                保存中…
+              </span>
+            )}
+            {saveStatus === 'saved' && (
+              <span className="text-xs text-white/90 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" />
+                保存済み
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onDelete(item.id)}
+          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 text-white/70 hover:text-white transition-colors shrink-0"
+          title="削除"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="bg-white px-4 py-3 space-y-3">
+        {/* 注意事項（マニュアルメモ） */}
+        {item.note && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+            <p className="text-xs font-semibold text-amber-700 mb-0.5">注意事項</p>
+            <p className="text-xs text-amber-800 leading-relaxed whitespace-pre-wrap">{item.note}</p>
+          </div>
+        )}
+
+        {/* 4 star ratings */}
+        {SCORE_LABELS.map(({ key, label, desc }) => (
+          <div key={key}>
+            <StarRating
+              label={label}
+              value={Math.round(item[key] / MINUTES_PER_STAR)}
+              onChange={v => onTimeChange(item.id, key, v * MINUTES_PER_STAR)}
+            />
+            <p className="text-xs text-slate-400 mt-0.5 ml-1">{desc}</p>
+          </div>
+        ))}
+
+        {/* 改善メモ（当日の出来栄え・気づき） */}
+        <div className="pt-3 border-t border-slate-100">
+          <label className="text-xs font-medium text-slate-600">
+            改善メモ
+            <span className="ml-1 font-normal text-slate-400">（今日の出来栄え・気づきを記録）</span>
+          </label>
+          <div className="relative mt-1">
+            <textarea
+              value={item.comment}
+              onChange={e => onCommentChange(item.id, e.target.value)}
+              placeholder="例：盛り付けに時間がかかった。次回は事前に器を並べておく。"
+              rows={3}
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"
+            />
+            {commentStatus === 'saving' && (
+              <span className="absolute bottom-2 right-2 text-xs text-slate-400 flex items-center gap-1 bg-white/80 px-1 rounded">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                保存中…
+              </span>
+            )}
+            {commentStatus === 'saved' && (
+              <span className="absolute bottom-2 right-2 text-xs text-teal-600 flex items-center gap-1 bg-white/80 px-1 rounded">
+                <CheckCircle2 className="w-3 h-3" />
+                保存済み
+              </span>
+            )}
+          </div>
+
+          {/* OODAに課題登録ボタン（メモが入力済みのときのみ表示） */}
+          {item.comment.trim() && (
+            <div className="mt-2 flex justify-end">
+              {oodaStatus === 'done' ? (
+                <span className="text-xs text-teal-600 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  OODAボードに登録済み
+                </span>
+              ) : oodaStatus === 'error' ? (
+                <span className="text-xs text-red-500">登録に失敗しました</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleRegisterOoda}
+                  disabled={oodaStatus === 'sending'}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-teal-600 border border-slate-200 hover:border-teal-300 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+                >
+                  {oodaStatus === 'sending'
+                    ? <><Loader2 className="w-3 h-3 animate-spin" />登録中…</>
+                    : <><Plus className="w-3 h-3" />OODAボードに課題登録</>
+                  }
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
+
+// ─── メインコンポーネント ──────────────────────────────────────────────────
 
 export default function RecordPage() {
-  const { getCell, loadWeek } = useSchedules()
+  const [date,     setDate]     = useState(toDateString(new Date()))
+  const [mealType, setMealType] = useState<MealType>('朝食')
+  const [items,    setItems]    = useState<MenuItem[]>([])
+  const [loading,  setLoading]  = useState(false)
+  const [showAdd,  setShowAdd]  = useState(false)
+  const [newName,  setNewName]  = useState('')
+  const [newCat,   setNewCat]   = useState('')
+  const [adding,   setAdding]   = useState(false)
+  const [saveStatuses,    setSaveStatuses]    = useState<Record<string, SaveStatus>>({})
+  const [commentStatuses, setCommentStatuses] = useState<Record<string, SaveStatus>>({})
 
-  const [form, setForm] = useState<FormState>({
-    date:         toDateString(new Date()),
-    meal_type:    '朝食',
-    schedule_id:  '',
-    useFixedTime: false,
-    scores:       INITIAL_SCORES,
-    total_time:   '',
-    timeIsManual: false,
-    note:         '',
-  })
-  const [selectedCategory, setSelectedCategory] = useState<MenuCategory | null>(null)
-  const [submitted, setSubmitted]   = useState(false)
-  const [isSaving, setIsSaving]     = useState(false)
-  const [saveError, setSaveError]   = useState<string | null>(null)
-  const [loadingRecord, setLoadingRecord] = useState(false)
+  // debounce タイマー管理（key = item.id or `${item.id}_comment`）
+  const timers   = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // 最新の items を debounce コールバック内で参照するため ref で持つ
+  const itemsRef = useRef<MenuItem[]>(items)
+  itemsRef.current = items
 
-  // 日付が変わったら Supabase からその週のスケジュールをロード
+  // 未保存の debounce タイマーをすべて即時実行して保存する
+  const flushPendingSaves = useCallback(async () => {
+    const keys = [...timers.current.keys()]
+    if (keys.length === 0) return
+
+    // タイマーを全停止してマップをクリア
+    for (const timer of timers.current.values()) clearTimeout(timer)
+    timers.current.clear()
+
+    // key が "_comment" で終わるかどうかで分類
+    const itemIds: string[]    = []
+    const commentIds: string[] = []
+    for (const key of keys) {
+      if (key.endsWith('_comment')) commentIds.push(key.slice(0, -'_comment'.length))
+      else itemIds.push(key)
+    }
+
+    try {
+      await Promise.all([
+        ...itemIds.map(id => {
+          const latest = itemsRef.current.find(i => i.id === id)
+          if (!latest) return Promise.resolve()
+          return updateMenuItemTimes(id, {
+            prep_time:    latest.prep_time,
+            measure_time: latest.measure_time,
+            cook_time:    latest.cook_time,
+            serve_time:   latest.serve_time,
+          })
+        }),
+        ...commentIds.map(id => {
+          const latest = itemsRef.current.find(i => i.id === id)
+          if (!latest) return Promise.resolve()
+          return updateMenuItemComment(id, latest.comment)
+        }),
+      ])
+    } catch (err) {
+      console.error('[flushPendingSaves]', err)
+    }
+  }, [])
+
+  // 日付・食事区分が変わったらデータ取得（切り替え前のタイマーは即時フラッシュ）
   useEffect(() => {
-    loadWeek(getWeekDates(new Date(form.date)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.date])
+    let cancelled = false
+    ;(async () => {
+      await flushPendingSaves()
+      if (cancelled) return
+      setSaveStatuses({})
+      setCommentStatuses({})
+      setLoading(true)
+      setItems([])
+      const data = await fetchMenuItemsByDate(date, mealType)
+      if (!cancelled) { setItems(sortMenuItems(data)); setLoading(false) }
+    })()
+    return () => { cancelled = true }
+  }, [date, mealType, flushPendingSaves])
 
-  const mealsForDate = getCell(form.date, form.meal_type)
+  // ── 時間変更（楽観的更新 + debounce 保存） ──────────────────────────────
+  const handleTimeChange = useCallback((id: string, key: TimeKey, minutes: number) => {
+    // 楽観的更新
+    setItems(prev => prev.map(item => item.id === id ? { ...item, [key]: minutes } : item))
+    setSaveStatuses(prev => ({ ...prev, [id]: 'saving' }))
 
-  const presentCategories = [
-    ...new Set(
-      mealsForDate
-        .map(s => s.menu?.category)
-        .filter((c): c is MenuCategory => !!c)
-    ),
-  ]
-  const orderedCategories = MENU_CATEGORIES.filter(c => presentCategories.includes(c))
+    // debounce — タイマーをリセット
+    const existing = timers.current.get(id)
+    if (existing) clearTimeout(existing)
 
-  const filteredMenus = selectedCategory
-    ? mealsForDate.filter(s => s.menu?.category === selectedCategory)
-    : []
+    const timer = setTimeout(() => {
+      const latest = itemsRef.current.find(i => i.id === id)
+      if (!latest) return
+      updateMenuItemTimes(id, {
+        prep_time:    latest.prep_time,
+        measure_time: latest.measure_time,
+        cook_time:    latest.cook_time,
+        serve_time:   latest.serve_time,
+      }).then(() => {
+        setSaveStatuses(s => ({ ...s, [id]: 'saved' }))
+        setTimeout(() => {
+          setSaveStatuses(s => s[id] === 'saved' ? { ...s, [id]: 'idle' } : s)
+        }, 2000)
+      })
+      timers.current.delete(id)
+    }, DEBOUNCE_MS)
 
-  const selectedSchedule: Schedule | undefined = mealsForDate.find(s => s.id === form.schedule_id)
-  const selectedMenu = selectedSchedule?.menu
+    timers.current.set(id, timer)
+  }, [])
 
-  // ── ハンドラ ──────────────────────────────────────
+  // ── 改善メモ変更（楽観的更新 + debounce 保存） ────────────────────────
+  const handleCommentChange = useCallback((id: string, comment: string) => {
+    // 楽観的更新（itemsRef も同期される）
+    setItems(prev => prev.map(item => item.id === id ? { ...item, comment } : item))
+    setCommentStatuses(prev => ({ ...prev, [id]: 'saving' }))
 
-  const resetToMeal = (date: string, meal: MealType) => {
-    setSelectedCategory(null)
-    setForm(f => ({
-      ...f, date, meal_type: meal,
-      schedule_id: '', useFixedTime: false, scores: INITIAL_SCORES,
-      total_time: '', timeIsManual: false, note: '',
-    }))
-  }
+    const key = `${id}_comment`
+    const existing = timers.current.get(key)
+    if (existing) clearTimeout(existing)
 
-  const selectCategory = (cat: MenuCategory) => {
-    setSelectedCategory(cat)
-    setForm(f => ({
-      ...f, schedule_id: '', useFixedTime: false, scores: INITIAL_SCORES,
-      total_time: '', timeIsManual: false, note: '',
-    }))
-  }
+    const timer = setTimeout(() => {
+      // itemsRef から最新値を読む（時間ハンドラと同じパターン）
+      const latest = itemsRef.current.find(i => i.id === id)
+      if (!latest) return
+      updateMenuItemComment(id, latest.comment).then(errMsg => {
+        if (errMsg) {
+          console.error('[handleCommentChange]', errMsg)
+          return
+        }
+        setCommentStatuses(s => ({ ...s, [id]: 'saved' }))
+        setTimeout(() => {
+          setCommentStatuses(s => s[id] === 'saved' ? { ...s, [id]: 'idle' } : s)
+        }, 2000)
+      })
+      timers.current.delete(key)
+    }, DEBOUNCE_MS)
 
-  const selectMenu = async (scheduleId: string) => {
-    const schedule = mealsForDate.find(s => s.id === scheduleId)
-    const menu = schedule?.menu
-    const fixed = menu?.is_fixed_time === true
+    timers.current.set(key, timer)
+  }, [])
 
-    // まずデフォルト値でセット
-    setForm(f => ({
-      ...f,
-      schedule_id: scheduleId,
-      useFixedTime: fixed,
-      scores:       INITIAL_SCORES,
-      total_time:   fixed ? String(menu?.standard_time ?? '') : '',
-      timeIsManual: false,
-      note:         '',
-    }))
-    setSaveError(null)
+  // ── 削除 ────────────────────────────────────────────────────────────────
+  const handleDelete = useCallback(async (id: string) => {
+    const existing = timers.current.get(id)
+    if (existing) { clearTimeout(existing); timers.current.delete(id) }
+    const commentTimer = timers.current.get(`${id}_comment`)
+    if (commentTimer) { clearTimeout(commentTimer); timers.current.delete(`${id}_comment`) }
+    setItems(prev => prev.filter(i => i.id !== id))
+    await deleteMenuItem(id)
+  }, [])
 
-    // 既存レコードがあれば上書き
-    setLoadingRecord(true)
-    const existing = await fetchRecordByScheduleId(scheduleId)
-    setLoadingRecord(false)
-    if (existing) {
-      setForm(f => ({
-        ...f,
-        scores: {
-          prep:    existing.prep_score,
-          measure: existing.measure_score,
-          cook:    existing.cook_score,
-          serve:   existing.serve_score,
-        },
-        total_time:   existing.total_time != null ? String(existing.total_time) : f.total_time,
-        timeIsManual: existing.total_time != null,
-        note:         existing.note ?? '',
-      }))
+  // ── メニュー追加 ──────────────────────────────────────────────────────
+  const handleAdd = async () => {
+    if (!newName.trim()) return
+    setAdding(true)
+    const inserted = await insertMenuItem({
+      date,
+      meal_type: mealType,
+      menu_name: newName.trim(),
+      category:  newCat.trim(),
+    })
+    setAdding(false)
+    if (inserted) {
+      setItems(prev => sortMenuItems([...prev, inserted]))
+      setNewName('')
+      setNewCat('')
+      setShowAdd(false)
     }
   }
-
-  const toggleFixedTime = () => {
-    setForm(f => {
-      const newFixed = !f.useFixedTime
-      if (newFixed) {
-        return { ...f, useFixedTime: true, total_time: String(selectedMenu?.standard_time ?? ''), timeIsManual: false }
-      } else {
-        const autoCalc = calcAutoTime(f.scores)
-        return { ...f, useFixedTime: false, total_time: autoCalc > 0 ? String(autoCalc) : '', timeIsManual: false }
-      }
-    })
-  }
-
-  const setScore = (key: ScoreKey, v: number) => {
-    setForm(f => {
-      if (f.useFixedTime) return f
-      const newScores = { ...f.scores, [key]: v }
-      const newTime = f.timeIsManual ? f.total_time : String(calcAutoTime(newScores))
-      return { ...f, scores: newScores, total_time: newTime }
-    })
-  }
-
-  const handleTimeChange = (v: string) => {
-    setForm(f => ({ ...f, total_time: v, timeIsManual: true }))
-  }
-
-  const resetAutoTime = () => {
-    setForm(f => ({
-      ...f,
-      total_time: f.useFixedTime
-        ? String(selectedMenu?.standard_time ?? '')
-        : String(calcAutoTime(f.scores)),
-      timeIsManual: false,
-    }))
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!form.schedule_id || form.total_time === '') return
-
-    setIsSaving(true)
-    setSaveError(null)
-
-    const error = await upsertRecord({
-      schedule_id:   form.schedule_id,
-      prep_score:    form.scores.prep,
-      measure_score: form.scores.measure,
-      cook_score:    form.scores.cook,
-      serve_score:   form.scores.serve,
-      total_time:    parseInt(form.total_time) || null,
-      note:          form.note || null,
-    })
-
-    setIsSaving(false)
-
-    if (error) {
-      setSaveError(error)
-      return
-    }
-
-    setSubmitted(true)
-    setTimeout(() => {
-      setSubmitted(false)
-      setForm(f => ({
-        ...f, schedule_id: '', useFixedTime: false, scores: INITIAL_SCORES,
-        total_time: '', timeIsManual: false, note: '',
-      }))
-    }, 2500)
-  }
-
-  const autoTime  = calcAutoTime(form.scores)
-  const hasScores = !Object.values(form.scores).every(v => v === 0)
-  const avgScore  = !form.useFixedTime && hasScores
-    ? (Object.values(form.scores).reduce((a, b) => a + b, 0) / 4).toFixed(1)
-    : null
-
-  const canSubmit = !!form.schedule_id && form.total_time !== '' && !isSaving
-
-  const showResetTime = form.timeIsManual && (
-    form.useFixedTime ? !!selectedMenu?.standard_time : hasScores
-  )
-  const resetTimeLabel = form.useFixedTime
-    ? `↩ 標準時間（${selectedMenu?.standard_time}分）に戻す`
-    : `↩ 自動計算値（${autoTime}分）に戻す`
 
   return (
     <div className="p-4 max-w-lg mx-auto space-y-5">
       <div>
         <h1 className="text-xl font-bold text-slate-800">作業記録・評価入力</h1>
-        <p className="text-sm text-slate-500 mt-0.5">現場スタッフ用（スマホ対応）</p>
+        <p className="text-sm text-slate-500 mt-0.5">メニュー単位で作業時間を記録</p>
       </div>
 
-      {submitted && (
-        <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 font-medium">
-          <CheckCircle2 className="w-4 h-4" />
-          記録を保存しました。次のメニューを選択してください。
+      {/* ① 日付・食事区分 */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
+        <h2 className="font-bold text-slate-700 text-sm">① 対象の食事を選択</h2>
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-slate-600">日付</label>
+          <input
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+          />
         </div>
-      )}
-
-      {saveError && (
-        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          保存に失敗しました: {saveError}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="space-y-5">
-
-        {/* ① 日付・食事区分 */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
-          <h2 className="font-bold text-slate-700 text-sm">① 対象の食事を選択</h2>
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-600">日付</label>
-            <input
-              type="date"
-              value={form.date}
-              onChange={e => resetToMeal(e.target.value, form.meal_type)}
-              className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-600">食事区分</label>
-            <div className="grid grid-cols-3 gap-2">
-              {MEAL_TYPES.map(meal => (
-                <button key={meal} type="button"
-                  onClick={() => resetToMeal(form.date, meal)}
-                  className={`py-2.5 rounded-xl text-sm font-semibold border transition-all ${
-                    form.meal_type === meal
-                      ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
-                      : 'text-slate-600 border-slate-200 hover:border-teal-300'
-                  }`}
-                >
-                  {meal}
-                </button>
-              ))}
-            </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-slate-600">食事区分</label>
+          <div className="grid grid-cols-3 gap-2">
+            {MEAL_TYPES.map(meal => (
+              <button key={meal} type="button"
+                onClick={() => setMealType(meal)}
+                className={`py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                  mealType === meal
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                    : 'text-slate-600 border-slate-200 hover:border-teal-300'
+                }`}
+              >
+                {meal}
+              </button>
+            ))}
           </div>
         </div>
+      </div>
 
-        {/* ② ジャンル選択 */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
-          <h2 className="font-bold text-slate-700 text-sm">② ジャンルを選択</h2>
-          {orderedCategories.length === 0 ? (
-            <p className="text-sm text-slate-400 py-2">この日付・食事区分のメニューがありません</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {orderedCategories.map(cat => (
-                <button
-                  key={cat} type="button"
-                  onClick={() => selectCategory(cat)}
-                  className={`px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${
-                    selectedCategory === cat
-                      ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-sm'
-                      : `${CATEGORY_STYLE[cat] ?? 'bg-slate-50 text-slate-600 border-slate-200'} hover:border-teal-300`
-                  }`}
-                >
-                  {cat}
-                  <span className="ml-1.5 text-xs opacity-70">
-                    {mealsForDate.filter(s => s.menu?.category === cat).length}品
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ③ メニュー選択 */}
-        {selectedCategory && (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${CATEGORY_STYLE[selectedCategory] ?? ''}`}>
-                {selectedCategory}
-              </span>
-              <h2 className="font-bold text-slate-700 text-sm">③ 評価するメニューを選択</h2>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {filteredMenus.map(s => (
-                <button
-                  key={s.id} type="button"
-                  onClick={() => selectMenu(s.id)}
-                  className={`text-left p-3 rounded-xl border-2 transition-all ${
-                    form.schedule_id === s.id
-                      ? 'border-teal-500 bg-teal-50 shadow-sm'
-                      : 'border-slate-200 bg-white hover:border-teal-300'
-                  }`}
-                >
-                  <div className="flex items-start gap-1.5">
-                    <div className="flex-1">
-                      <p className="text-sm font-bold text-slate-800 leading-tight">{s.menu?.name}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">目安 {s.menu?.standard_time}分</p>
-                    </div>
-                    {s.menu?.is_fixed_time && (
-                      <span className="shrink-0 text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-medium flex items-center gap-0.5">
-                        <Lock className="w-2.5 h-2.5" />固定
-                      </span>
-                    )}
-                  </div>
-                  {s.menu?.tags && s.menu.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {s.menu.tags.slice(0, 3).map(tag => (
-                        <span key={tag} className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-            {/* 既存レコード読込中インジケーター */}
-            {loadingRecord && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 py-1">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                過去の評価データを読み込み中…
+      {/* ② メニュー一覧 */}
+      <div className="space-y-3">
+        {loading ? (
+          <div className="flex items-center gap-2 py-8 justify-center text-slate-400">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">読み込み中…</span>
+          </div>
+        ) : (
+          <>
+            {items.length === 0 && !showAdd && (
+              <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-8 text-center">
+                <p className="text-sm text-slate-400">まだメニューが登録されていません</p>
+                <p className="text-xs text-slate-300 mt-1">下の「＋ メニューを追加」から登録できます</p>
               </div>
             )}
-          </div>
-        )}
 
-        {/* ④ 評価エリア */}
-        {selectedSchedule && (
-          <>
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="font-bold text-slate-700 text-sm">④ 作業負荷評価（0〜10 ★）</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    <span className="font-semibold text-slate-600">{selectedMenu?.name}</span> の評価
-                  </p>
-                </div>
-                {avgScore && (
-                  <span className="text-xs text-slate-500">
-                    平均 <span className="text-teal-600 font-bold text-sm">{avgScore}</span>
-                  </span>
-                )}
-              </div>
+            {items.map(item => (
+              <MenuItemRow
+                key={item.id}
+                item={item}
+                onTimeChange={handleTimeChange}
+                onDelete={handleDelete}
+                onCommentChange={handleCommentChange}
+                saveStatus={saveStatuses[item.id] ?? 'idle'}
+                commentStatus={commentStatuses[item.id] ?? 'idle'}
+              />
+            ))}
 
-              {/* 固定/個別評価トグル */}
-              <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all select-none ${
-                form.useFixedTime ? 'bg-slate-50 border-slate-300' : 'bg-white border-slate-200 hover:border-teal-300'
-              }`}>
-                <div className="relative shrink-0 w-10 h-6">
-                  <input type="checkbox" checked={form.useFixedTime} onChange={toggleFixedTime} className="sr-only" />
-                  <div className={`absolute inset-0 rounded-full transition-colors ${form.useFixedTime ? 'bg-teal-600' : 'bg-slate-300'}`} />
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.useFixedTime ? 'translate-x-5' : 'translate-x-1'}`} />
+            {/* メニュー追加フォーム */}
+            {showAdd && (
+              <div className="bg-white rounded-2xl border border-teal-200 shadow-sm p-4 space-y-3">
+                <h3 className="font-semibold text-slate-700 text-sm">メニューを追加</h3>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    メニュー名 <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newName}
+                    onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+                    placeholder="例：ご飯、鶏の唐揚げ"
+                    autoFocus
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
-                    {form.useFixedTime
-                      ? <><Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />標準時間で固定中</>
-                      : <><Unlock className="w-3.5 h-3.5 text-teal-500 shrink-0" />個別評価モード</>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">カテゴリ（任意）</label>
+                  <input
+                    type="text"
+                    value={newCat}
+                    onChange={e => setNewCat(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+                    placeholder="例：主食、主菜、副菜、汁物"
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowAdd(false); setNewName(''); setNewCat('') }}
+                    className="flex-1 py-2 text-sm text-slate-500 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                  >
+                    キャンセル
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAdd}
+                    disabled={!newName.trim() || adding}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl transition-colors"
+                  >
+                    {adding
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />追加中…</>
+                      : <><Plus className="w-3.5 h-3.5" />追加</>
                     }
-                  </p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    標準時間: {selectedMenu?.standard_time}分
-                    {selectedMenu?.is_fixed_time && (
-                      <span className="ml-1.5 text-slate-300">（マスタ設定: デフォルト固定）</span>
-                    )}
-                  </p>
+                  </button>
                 </div>
-              </label>
-
-              {/* 星評価（固定中はグレーアウト） */}
-              <div className={`space-y-4 transition-opacity duration-200 ${form.useFixedTime ? 'opacity-40 pointer-events-none' : ''}`}>
-                {SCORE_LABELS.map(({ key, label, desc }) => (
-                  <div key={key}>
-                    <StarRating label={label} value={form.scores[key]} onChange={v => setScore(key, v)} />
-                    <p className="text-xs text-slate-400 mt-0.5 ml-1">{desc}</p>
-                  </div>
-                ))}
               </div>
-            </div>
+            )}
 
-            {/* ⑤ 実作業時間（常に手動入力可能） */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-2">
-              <div className="flex items-center justify-between flex-wrap gap-1">
-                <label className="text-sm font-bold text-slate-700">⑤ 実作業時間（分）</label>
-                {!form.useFixedTime && hasScores && (
-                  <div className="flex items-center gap-1">
-                    <Calculator className="w-3.5 h-3.5 text-teal-600" />
-                    <span className="text-xs text-teal-600 font-medium">
-                      ({form.scores.prep}+{form.scores.measure}+{form.scores.cook}+{form.scores.serve})×{MINUTES_PER_STAR} = {autoTime}分
-                    </span>
-                  </div>
-                )}
-              </div>
-              <input
-                type="number" min={0} max={300}
-                value={form.total_time}
-                onChange={e => handleTimeChange(e.target.value)}
-                placeholder={form.useFixedTime ? undefined : '★を入力すると自動計算'}
-                className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 ${
-                  form.timeIsManual ? 'border-amber-300 bg-amber-50' : 'border-slate-300'
-                }`}
-              />
-              {showResetTime && (
-                <button type="button" onClick={resetAutoTime} className="text-xs text-teal-600 hover:underline">
-                  {resetTimeLabel}
-                </button>
-              )}
-              {form.timeIsManual && (
-                <p className="text-xs text-amber-600">手動入力中（直接入力値が優先されます）</p>
-              )}
-            </div>
-
-            {/* ⑥ 音声メモ */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-              <label className="text-sm font-bold text-slate-700 block mb-2">
-                ⑥ 課題・気づきメモ
-                <span className="ml-2 text-xs font-normal text-teal-600">🎤 音声入力対応</span>
-              </label>
-              <VoiceInput
-                value={form.note}
-                onChange={v => setForm(f => ({ ...f, note: v }))}
-                placeholder="気づいたこと、改善案などを自由に入力（マイクボタンで音声入力）"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="w-full py-4 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold rounded-2xl text-sm transition-colors shadow-md disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-              {!form.schedule_id
-                ? 'メニューを選択してください'
-                : form.total_time === ''
-                ? '作業時間を入力してください'
-                : isSaving
-                ? '保存中…'
-                : `「${selectedMenu?.name}」の記録を保存する`}
-            </button>
+            {/* ＋ メニューを追加ボタン */}
+            {!showAdd && (
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className="w-full py-3 border-2 border-dashed border-slate-200 rounded-2xl text-sm text-slate-400 hover:border-teal-300 hover:text-teal-600 hover:bg-teal-50/40 transition-colors flex items-center justify-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                メニューを追加
+              </button>
+            )}
           </>
         )}
-      </form>
+      </div>
     </div>
   )
 }

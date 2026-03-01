@@ -1,25 +1,7 @@
 import { clsx, type ClassValue } from 'clsx'
-import { NutritionSummary, Schedule } from './types'
 
 export function cn(...inputs: ClassValue[]) {
   return clsx(inputs)
-}
-
-export function calcNutrition(schedules: Schedule[]): NutritionSummary {
-  return schedules.reduce(
-    (acc, s) => {
-      if (!s.menu) return acc
-      return {
-        calories: acc.calories + s.menu.calories,
-        protein: acc.protein + s.menu.protein,
-        salt: acc.salt + s.menu.salt,
-        fat: acc.fat + s.menu.fat,
-        carbohydrate: acc.carbohydrate + s.menu.carbohydrate,
-        total_time: acc.total_time + s.menu.standard_time,
-      }
-    },
-    { calories: 0, protein: 0, salt: 0, fat: 0, carbohydrate: 0, total_time: 0 }
-  )
 }
 
 export function formatDate(dateStr: string): string {
@@ -42,6 +24,22 @@ export function toDateString(date: Date): string {
   return date.toISOString().split('T')[0]
 }
 
-export const SALT_LIMIT_PER_MEAL = 2.5 // g
-export const CALORIE_LIMIT_PER_MEAL = 800 // kcal
-export const DAILY_SALT_LIMIT = 7.5 // g
+// ─── カテゴリ表示順 ────────────────────────────────────────────────────────
+// 未定義カテゴリは末尾（order = 99）
+const CATEGORY_ORDER: Record<string, number> = {
+  '主食':    0,
+  '主菜':    1,
+  '副菜':    2,
+  '汁物':    3,
+  'デザート': 4,
+}
+
+/** MenuItem をカテゴリ固定順 → created_at 昇順でソートして返す（破壊なし） */
+export function sortMenuItems<T extends { category: string; created_at: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const oa = CATEGORY_ORDER[a.category] ?? 99
+    const ob = CATEGORY_ORDER[b.category] ?? 99
+    if (oa !== ob) return oa - ob
+    return a.created_at.localeCompare(b.created_at)
+  })
+}

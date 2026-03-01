@@ -1,6 +1,6 @@
 'use client'
 
-import { Star, X } from 'lucide-react'
+import { Clock, X } from 'lucide-react'
 
 interface StarRatingProps {
   value: number      // 0 = 不要/未評価、1〜10 = 作業負荷
@@ -40,14 +40,14 @@ export function StarRating({ value, onChange, label }: StarRatingProps) {
             key={n}
             type="button"
             onClick={() => handleClick(n)}
-            className="touch-manipulation p-0.5 focus:outline-none active:scale-90 transition-transform"
+            className="touch-manipulation p-0.5 focus:outline-none hover:scale-110 active:scale-90 transition-all duration-200"
             aria-label={`${n}点${value === n ? '（タップでクリア）' : ''}`}
           >
-            <Star
-              className={`w-7 h-7 transition-colors ${
+            <Clock
+              className={`w-7 h-7 transition-all duration-300 ${
                 n <= value
-                  ? 'text-amber-400 fill-amber-400'
-                  : 'text-slate-200 fill-slate-200'
+                  ? 'text-indigo-500'
+                  : 'text-slate-200'
               }`}
             />
           </button>
@@ -56,7 +56,7 @@ export function StarRating({ value, onChange, label }: StarRatingProps) {
 
       <div className="flex justify-between text-xs text-slate-400 px-0.5">
         <span>0 = 不要</span>
-        <span className="text-amber-600">1★ = 5分</span>
+        <span className="text-slate-400">（時計1つ = 5分）</span>
         <span>10 = 負荷大</span>
       </div>
     </div>

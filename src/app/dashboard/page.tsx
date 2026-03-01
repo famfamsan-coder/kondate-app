@@ -1,21 +1,16 @@
-import { AlertTriangle, Clock, Star, TrendingUp } from 'lucide-react'
-import { WorkloadChart, DEFAULT_WARNING_MINUTES } from '@/components/dashboard/WorkloadChart'
-import { IssueReminders } from '@/components/dashboard/IssueReminders'
 import { EvaluationTimeline } from '@/components/dashboard/EvaluationTimeline'
-import { fetchSchedulesByDates } from '@/lib/api/schedules'
-import { fetchRecentRecords } from '@/lib/api/records'
-import { fetchIssues } from '@/lib/api/issues'
-import { calcNutrition, getWeekDates, toDateString } from '@/lib/utils'
-import type { WorkRecord } from '@/lib/types'
-
-function avgScore(records: WorkRecord[]) {
-  if (!records.length) return 0
-  const total = records.reduce(
-    (sum, r) => sum + (r.prep_score + r.measure_score + r.cook_score + r.serve_score) / 4,
-    0
-  )
-  return (total / records.length).toFixed(1)
-}
+import { OodaTimeline } from '@/components/dashboard/OodaTimeline'
+import { DashboardClientTop } from '@/components/dashboard/DashboardClientTop'
+import { FieldNotes } from '@/components/dashboard/FieldNotes'
+import { DailyNoticeCard } from '@/components/dashboard/DailyNoticeCard'
+import { CheckStatusBanner } from '@/components/dashboard/CheckStatusBanner'
+import { fetchMenuItemsByDateRange, fetchRecentMenuItems, fetchMenuItemsWithComments } from '@/lib/api/menuItems'
+import { fetchOodas } from '@/lib/api/ooda'
+import { fetchDailyNotice } from '@/lib/api/dailyNotice'
+import { fetchTemperatureLog } from '@/lib/api/temperatureLog'
+import { fetchFinalCheckLog } from '@/lib/api/finalCheckLog'
+import { toDateString } from '@/lib/utils'
+import type { MenuItem } from '@/lib/types'
 
 function formatTodayLabel(dateStr: string): string {
   const d = new Date(dateStr)
@@ -23,132 +18,99 @@ function formatTodayLabel(dateStr: string): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${DOW[d.getDay()]}）`
 }
 
-export default async function DashboardPage() {
-  const today = toDateString(new Date())
-  const weekDates = getWeekDates(new Date())
+function getNextDates(todayStr: string, days: number): string[] {
+  return Array.from({ length: days + 1 }, (_, i) => {
+    const d = new Date(`${todayStr}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + i)
+    return d.toISOString().split('T')[0]
+  })
+}
 
-  const [weekSchedules, recentRecords, issues] = await Promise.all([
-    fetchSchedulesByDates(weekDates),
-    fetchRecentRecords(10),
-    fetchIssues(),
+function calcTotalTime(items: MenuItem[]): number {
+  return items.reduce((s, m) => s + m.prep_time + m.measure_time + m.cook_time + m.serve_time, 0)
+}
+
+export default async function DashboardPage() {
+  const today      = toDateString(new Date())
+  const next3Dates = getNextDates(today, 3)
+
+  const [
+    recentMenuItems, next3MenuItems, allOodas, fieldNoteItems,
+    noticeContent, tempLog, checkLog,
+  ] = await Promise.all([
+    fetchRecentMenuItems(20),
+    fetchMenuItemsByDateRange(next3Dates[0], next3Dates[next3Dates.length - 1]),
+    fetchOodas(),
+    fetchMenuItemsWithComments(15),
+    fetchDailyNotice(today),
+    fetchTemperatureLog(today),
+    fetchFinalCheckLog(today),
   ])
 
-  const todaySchedules = weekSchedules.filter(s => s.date === today)
-  const todayNutrition = calcNutrition(todaySchedules)
+  const fridgeMissing  = tempLog.fridge.filter(v => v === null).length
+  const freezerMissing = tempLog.freezer.filter(v => v === null).length
+  const uncheckedItems = checkLog.filter(i => !i.checked).length
 
-  const openIssues = issues.filter(i => i.status !== '解決済')
-  const thisWeekMenuIds = new Set(weekSchedules.map(s => s.menu_id))
-  const weekIssues = issues.filter(i => thisWeekMenuIds.has(i.menu_id))
-
-  const todayRecords = recentRecords.filter(r => r.schedule?.date === today)
+  const todayItems     = next3MenuItems.filter(m => m.date === today)
+  const todayTotalTime = calcTotalTime(todayItems)
+  const todayMealCount = todayItems.length
 
   return (
     <div className="p-4 lg:p-6 max-w-5xl mx-auto space-y-6">
-      {/* Page header */}
+
+      {/* ── ページヘッダー ── */}
       <div>
         <h1 className="text-xl font-bold text-slate-800">ダッシュボード</h1>
         <p className="text-sm text-slate-500 mt-0.5">{formatTodayLabel(today)}</p>
       </div>
 
-      {/* Summary KPI cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard
-          label="本日の作業時間（予測）"
-          value={`${todayNutrition.total_time} 分`}
-          icon={<Clock className="w-5 h-5 text-teal-600" />}
-          bg="bg-teal-50"
-        />
-        <KpiCard
-          label="本日のメニュー数"
-          value={`${todaySchedules.length} 品`}
-          icon={<TrendingUp className="w-5 h-5 text-sky-600" />}
-          bg="bg-sky-50"
-        />
-        <KpiCard
-          label="未解決課題"
-          value={`${openIssues.length} 件`}
-          icon={<AlertTriangle className="w-5 h-5 text-amber-500" />}
-          bg="bg-amber-50"
-          alert={openIssues.length > 0}
-        />
-        <KpiCard
-          label="今日の平均評価"
-          value={todayRecords.length ? `${avgScore(todayRecords)} / 10` : '—'}
-          icon={<Star className="w-5 h-5 text-yellow-500" />}
-          bg="bg-yellow-50"
-        />
-      </div>
+      {/* ── 【優先0a】今日のお知らせ（朝礼メモ） ── */}
+      <DailyNoticeCard date={today} initialContent={noticeContent} />
 
-      {/* Main grid */}
-      <div className="grid lg:grid-cols-2 gap-5">
-        {/* Workload chart */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-          <h2 className="font-bold text-slate-700 mb-4">本日の食事別・予測作業時間</h2>
-          <WorkloadChart schedules={todaySchedules} />
-          <p className="text-xs text-slate-400 mt-2 text-center">
-            点線：目安（朝食 {DEFAULT_WARNING_MINUTES['朝食']}分 / 昼食 {DEFAULT_WARNING_MINUTES['昼食']}分 / 夕食 {DEFAULT_WARNING_MINUTES['夕食']}分）
-          </p>
-        </div>
+      {/* ── 【優先0b】温度・点検チェックステータス ── */}
+      <CheckStatusBanner
+        fridgeMissing={fridgeMissing}
+        freezerMissing={freezerMissing}
+        uncheckedItems={uncheckedItems}
+      />
 
-        {/* Unresolved issues */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-bold text-slate-700">今週の未解決課題</h2>
-            {weekIssues.filter(i => i.status !== '解決済').length > 0 && (
-              <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
-                要対応
-              </span>
-            )}
-          </div>
-          <IssueReminders issues={weekIssues} />
-        </div>
-      </div>
+      {/* ── 【優先1】KPI + 安全セクション（クライアント, state 連動） ── */}
+      <DashboardClientTop
+        totalTime={todayTotalTime}
+        todayMealCount={todayMealCount}
+        next3MenuItems={next3MenuItems}
+        allOodas={allOodas}
+      />
 
-      {/* Evaluation timeline */}
+      {/* ── 【優先2】現場からの最新の気づき ── */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-        <h2 className="font-bold text-slate-700 mb-4">最新の現場評価</h2>
-        <EvaluationTimeline records={recentRecords} />
-      </div>
-
-      {/* Today's meal nutrition summary */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-        <h2 className="font-bold text-slate-700 mb-4">本日の栄養素合計</h2>
-        <div className="grid grid-cols-5 gap-3">
-          {[
-            { label: 'カロリー', value: `${Math.round(todayNutrition.calories)}`, unit: 'kcal' },
-            { label: 'タンパク質', value: todayNutrition.protein.toFixed(1), unit: 'g' },
-            { label: '塩分', value: todayNutrition.salt.toFixed(1), unit: 'g', warn: todayNutrition.salt > 7.5 },
-            { label: '脂質', value: todayNutrition.fat.toFixed(1), unit: 'g' },
-            { label: '炭水化物', value: todayNutrition.carbohydrate.toFixed(1), unit: 'g' },
-          ].map(({ label, value, unit, warn }) => (
-            <div
-              key={label}
-              className={`text-center p-3 rounded-xl ${warn ? 'bg-red-50 border border-red-200' : 'bg-slate-50'}`}
-            >
-              <p className="text-xs text-slate-500 mb-1">{label}</p>
-              <p className={`text-lg font-bold ${warn ? 'text-red-600' : 'text-slate-800'}`}>{value}</p>
-              <p className="text-xs text-slate-400">{unit}</p>
-              {warn && <p className="text-xs text-red-500 mt-0.5">⚠ 超過</p>}
-            </div>
-          ))}
+        <div className="flex items-center gap-3 mb-4">
+          <h2 className="font-bold text-slate-700">現場からの最新の気づき</h2>
+          {fieldNoteItems.length > 0 && (
+            <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-semibold">
+              {fieldNoteItems.length} 件
+            </span>
+          )}
+          <span className="text-xs text-slate-400 ml-auto">（作業記録の改善メモより）</span>
         </div>
+        <FieldNotes items={fieldNoteItems} />
       </div>
-    </div>
-  )
-}
 
-function KpiCard({
-  label, value, icon, bg, alert = false,
-}: {
-  label: string; value: string; icon: React.ReactNode; bg: string; alert?: boolean
-}) {
-  return (
-    <div className={`${bg} rounded-2xl p-4 border ${alert ? 'border-amber-300' : 'border-transparent'}`}>
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <p className="text-xs text-slate-500 leading-tight">{label}</p>
-        {icon}
+      {/* ── 【優先3】最新の作業記録 ── */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <h2 className="font-bold text-slate-700 mb-4">最新の作業記録</h2>
+        <EvaluationTimeline items={recentMenuItems} />
       </div>
-      <p className="text-2xl font-bold text-slate-800 leading-none">{value}</p>
+
+      {/* ── 【優先4】最新の課題タイムライン ── */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <h2 className="font-bold text-slate-700">🗣️ 最新の課題・改善メモ</h2>
+          <span className="text-xs text-slate-400">（OODAボードより）</span>
+        </div>
+        <OodaTimeline items={allOodas} />
+      </div>
+
     </div>
   )
 }

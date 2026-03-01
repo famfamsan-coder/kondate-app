@@ -1,18 +1,11 @@
 'use client'
 
-import { ScheduleProvider } from '@/lib/scheduleContext'
-import type { Menu } from '@/lib/types'
+import { MenuItemProvider } from '@/lib/menuItemContext'
 
-interface ProvidersProps {
-  children: React.ReactNode
-  /** layout.tsx の fetchMenus() から渡されるメニューデータ */
-  menus: Menu[]
-}
-
-export function Providers({ children, menus }: ProvidersProps) {
+export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <ScheduleProvider initialMenus={menus}>
+    <MenuItemProvider>
       {children}
-    </ScheduleProvider>
+    </MenuItemProvider>
   )
 }

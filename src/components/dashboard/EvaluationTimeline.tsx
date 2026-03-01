@@ -1,19 +1,18 @@
-import { Star, Clock, MessageSquare } from 'lucide-react'
-import { WorkRecord } from '@/lib/types'
+import { Clock } from 'lucide-react'
+import type { MenuItem } from '@/lib/types'
 
 interface Props {
-  records: WorkRecord[]
+  items: MenuItem[]
 }
 
-function avg(r: WorkRecord) {
-  return ((r.prep_score + r.measure_score + r.cook_score + r.serve_score) / 4).toFixed(1)
+function totalTime(item: MenuItem): number {
+  return item.prep_time + item.measure_time + item.cook_time + item.serve_time
 }
 
-function scoreColor(v: string) {
-  const n = parseFloat(v)
-  if (n >= 8) return 'text-green-600'
-  if (n >= 5) return 'text-amber-600'
-  return 'text-red-600'
+function timeColor(minutes: number): string {
+  if (minutes >= 60) return 'text-red-600'
+  if (minutes >= 30) return 'text-amber-600'
+  return 'text-green-600'
 }
 
 function formatTime(iso: string) {
@@ -23,47 +22,47 @@ function formatTime(iso: string) {
   return `${d.getMonth() + 1}/${d.getDate()} ${h}:${m}`
 }
 
-export function EvaluationTimeline({ records }: Props) {
-  if (records.length === 0) {
-    return <p className="text-sm text-slate-400 py-3">まだ評価データがありません</p>
+export function EvaluationTimeline({ items }: Props) {
+  if (items.length === 0) {
+    return <p className="text-sm text-slate-400 py-3">まだ作業記録がありません</p>
   }
 
-  const sorted = [...records].sort(
+  const sorted = [...items].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   )
 
   return (
     <ul className="space-y-3">
-      {sorted.map(record => {
-        const score = avg(record)
+      {sorted.map(item => {
+        const total = totalTime(item)
         return (
-          <li key={record.id} className="flex gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0">
-            <div className="w-10 h-10 rounded-full bg-teal-50 border border-teal-100 flex items-center justify-center shrink-0">
-              <Star className="w-4 h-4 text-teal-600" />
+          <li key={item.id} className="flex gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0">
+            <div className="w-10 h-10 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
+              <Clock className="w-4 h-4 text-indigo-500" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-semibold text-sm text-slate-800">
-                  {record.schedule?.menu?.name ?? '（メニュー不明）'}
+                <span className="font-semibold text-sm text-slate-800 truncate max-w-[160px]">
+                  {item.menu_name}
                 </span>
-                <span className={`text-sm font-bold ${scoreColor(score)}`}>{score}</span>
-                <span className="text-xs text-slate-400 ml-auto">{formatTime(record.created_at)}</span>
+                {item.category && (
+                  <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full shrink-0">
+                    {item.category}
+                  </span>
+                )}
+                {total > 0 && (
+                  <span className={`text-sm font-bold ${timeColor(total)}`}>{total}分</span>
+                )}
+                <span className="text-xs text-slate-400 ml-auto">{formatTime(item.created_at)}</span>
               </div>
               <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
-                <span className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  {record.total_time}分
-                </span>
-                <span className="text-xs text-slate-400">
-                  {record.schedule?.meal_type}
-                </span>
+                <span className="text-xs text-slate-400">{item.date} {item.meal_type}</span>
+                {total > 0 && (
+                  <span className="text-xs text-slate-400">
+                    仕込{item.prep_time}+計量{item.measure_time}+調理{item.cook_time}+盛{item.serve_time}分
+                  </span>
+                )}
               </div>
-              {record.note && (
-                <div className="flex items-start gap-1 mt-1.5">
-                  <MessageSquare className="w-3 h-3 text-slate-300 shrink-0 mt-0.5" />
-                  <p className="text-xs text-slate-500 line-clamp-2">{record.note}</p>
-                </div>
-              )}
             </div>
           </li>
         )

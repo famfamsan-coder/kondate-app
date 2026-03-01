@@ -2,14 +2,19 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, ClipboardList, Calendar, BookOpen } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, Calendar, FileUp, Target, Thermometer, Download } from 'lucide-react'
 
 const navItems = [
-  { href: '/dashboard', label: 'ダッシュボード', shortLabel: 'ダッシュ', icon: LayoutDashboard },
-  { href: '/record',    label: '作業記録',       shortLabel: '作業記録', icon: ClipboardList },
-  { href: '/calendar',  label: '献立カレンダー', shortLabel: 'カレンダー', icon: Calendar },
-  { href: '/knowledge', label: 'ナレッジ管理',   shortLabel: 'ナレッジ', icon: BookOpen },
+  { href: '/dashboard',  label: 'ダッシュボード',       shortLabel: 'ホーム', icon: LayoutDashboard, mobileHide: false },
+  { href: '/record',     label: '作業記録',             shortLabel: '記録',   icon: ClipboardList,   mobileHide: false },
+  { href: '/calendar',   label: '献立カレンダー',       shortLabel: '献立',   icon: Calendar,        mobileHide: false },
+  { href: '/ooda',       label: 'OODAボード',           shortLabel: 'OODA',   icon: Target,          mobileHide: false },
+  { href: '/checks',     label: 'チェックと温度管理',   shortLabel: '点検',   icon: Thermometer,     mobileHide: false },
+  { href: '/reports',    label: '提出用出力',           shortLabel: '出力',   icon: Download,        mobileHide: false },
+  { href: '/csv-import', label: 'CSVインポート',        shortLabel: 'CSV',    icon: FileUp,          mobileHide: true  },
 ]
+
+const mobileItems = navItems.filter(i => !i.mobileHide)
 
 export function AppNav() {
   const pathname = usePathname()
@@ -51,10 +56,10 @@ export function AppNav() {
         </div>
       </aside>
 
-      {/* ===== Mobile bottom nav ===== */}
+      {/* ===== Mobile bottom nav (CSV を除く 6 items) ===== */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 z-40">
-        <div className="grid grid-cols-4 safe-b">
-          {navItems.map(({ href, shortLabel, icon: Icon }) => {
+        <div className="grid grid-cols-6 safe-b">
+          {mobileItems.map(({ href, shortLabel, icon: Icon }) => {
             const active = pathname.startsWith(href)
             return (
               <Link
