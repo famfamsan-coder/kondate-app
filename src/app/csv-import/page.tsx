@@ -3,7 +3,7 @@
 import { useRef, useState, useCallback } from 'react'
 import Papa from 'papaparse'
 import { Upload, CheckCircle, Trash2, AlertCircle, FileText, X } from 'lucide-react'
-import { bulkInsertMenuItems } from '@/lib/api/menuItems'
+import { bulkImportMenuItemsAction } from './actions'
 import type { MealType } from '@/lib/types'
 
 // ─── 型定義 ────────────────────────────────────────────────────────────────
@@ -196,9 +196,10 @@ export default function CsvImportPage() {
         tags:      r.tags ? r.tags.split('|').map(t => t.trim()).filter(Boolean) : [],
         note:      r.note.trim(),
       }))
-      const saved = await bulkInsertMenuItems(items)
+      const result = await bulkImportMenuItemsAction(items)
+      if (!result.success) throw new Error(result.error)
       setStatus('success')
-      setMessage(`${saved} 件のメニューデータを保存しました。`)
+      setMessage(`${result.count} 件のメニューデータを保存しました。`)
       setRows([])
       setErrors(new Map())
     } catch (err) {
