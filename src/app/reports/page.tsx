@@ -52,8 +52,8 @@ const CHECK_KEYS = DEFAULT_CHECK_ITEMS.map(d => d.key)
 function buildTemperatureCsv(rows: TempLogRow[]): string[] {
   const header = csvRow([
     'date',
-    'fridge_1', 'fridge_2', 'fridge_3', 'fridge_4', 'fridge_5', 'fridge_6',
-    'freezer_1', 'freezer_2', 'freezer_3', 'freezer_4', 'freezer_5', 'freezer_6',
+    'fridge_1', 'fridge_2', 'fridge_3', 'fridge_4', 'fridge_5',
+    'freezer_6', 'freezer_7',
     'fridge_missing_count', 'freezer_missing_count',
     'updated_at',
   ])
@@ -94,8 +94,8 @@ function buildFinalCheckCsv(rows: CheckLogRow[]): string[] {
 function buildSummaryCsv(tempRows: TempLogRow[], checkRows: CheckLogRow[]): string[] {
   const header = csvRow([
     'date',
-    'fridge_1', 'fridge_2', 'fridge_3', 'fridge_4', 'fridge_5', 'fridge_6',
-    'freezer_1', 'freezer_2', 'freezer_3', 'freezer_4', 'freezer_5', 'freezer_6',
+    'fridge_1', 'fridge_2', 'fridge_3', 'fridge_4', 'fridge_5',
+    'freezer_6', 'freezer_7',
     'unchecked_count', 'unchecked_labels',
     'temp_missing_total', 'finalcheck_done',
     'updated_at',
@@ -110,8 +110,8 @@ function buildSummaryCsv(tempRows: TempLogRow[], checkRows: CheckLogRow[]): stri
     const t = tempMap.get(date)
     const c = checkMap.get(date)
 
-    const fridge  = t?.fridge  ?? Array.from({ length: 6 }, () => null as number | null)
-    const freezer = t?.freezer ?? Array.from({ length: 6 }, () => null as number | null)
+    const fridge  = t?.fridge  ?? Array.from({ length: 5 }, () => null as number | null)
+    const freezer = t?.freezer ?? Array.from({ length: 2 }, () => null as number | null)
     const tempMissingTotal =
       fridge.filter(v => v === null).length + freezer.filter(v => v === null).length
 

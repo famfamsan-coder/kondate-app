@@ -2,13 +2,21 @@
 
 import { useState, useEffect } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { TemperatureCard } from '@/components/checks/TemperatureCard'
-import { FinalChecklistCard } from '@/components/checks/FinalChecklistCard'
-import { fetchTemperatureLog } from '@/lib/api/temperatureLog'
-import { fetchFinalCheckLog } from '@/lib/api/finalCheckLog'
-import type { TempSlots } from '@/lib/api/temperatureLog'
-import type { CheckItem } from '@/lib/api/finalCheckLog'
+import { TemperatureCard }    from '@/components/checks/TemperatureCard'
+import { HazardousCheckCard } from '@/components/checks/HazardousCheckCard'
+import { EquipmentCheckCard } from '@/components/checks/EquipmentCheckCard'
+import { CleaningCheckCard }  from '@/components/checks/CleaningCheckCard'
+import { fetchTemperatureLog }    from '@/lib/api/temperatureLog'
+import { fetchHazardousCheckLog } from '@/lib/api/hazardousCheckLog'
+import { fetchEquipmentCheckLog } from '@/lib/api/equipmentCheckLog'
+import { fetchCleaningCheckLog }  from '@/lib/api/cleaningCheckLog'
+import type { TempSlots }          from '@/lib/api/temperatureLog'
+import type { HazardousCheckData } from '@/lib/api/hazardousCheckLog'
+import type { EquipmentCheckData } from '@/lib/api/equipmentCheckLog'
+import type { CleaningCheckData }  from '@/lib/api/cleaningCheckLog'
 import { toDateString } from '@/lib/utils'
+
+// ─── ヘルパー ──────────────────────────────────────────────────────────────
 
 function addDays(dateStr: string, n: number): string {
   const d = new Date(`${dateStr}T00:00:00Z`)
@@ -22,24 +30,63 @@ function formatDateLabel(dateStr: string): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${DOW[d.getDay()]}）`
 }
 
-const EMPTY_SLOTS: TempSlots = Array(6).fill(null)
+// ─── タブ定義 ──────────────────────────────────────────────────────────────
+
+type TabKey = 'temp' | 'hazardous' | 'equipment' | 'cleaning'
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'temp',      label: '温度管理' },
+  { key: 'hazardous', label: '危険物施設点検表' },
+  { key: 'equipment', label: '厨房機器点検表' },
+  { key: 'cleaning',  label: '厨房清掃管理点検表' },
+]
+
+// ─── 初期値 ────────────────────────────────────────────────────────────────
+
+const EMPTY_FRIDGE:  TempSlots = Array(5).fill(null)
+const EMPTY_FREEZER: TempSlots = Array(2).fill(null)
+
+const defaultHazardous = (): HazardousCheckData => ({
+  items: [], confirmer: '', adminSign: '',
+})
+const defaultEquipment = (): EquipmentCheckData => ({
+  items: [], confirmer: '', adminSign: '',
+})
+const defaultCleaning  = (): CleaningCheckData => ({
+  items: [], assignee: '', adminSign: '',
+})
+
+// ─── ページコンポーネント ─────────────────────────────────────────────────
 
 export default function ChecksPage() {
   const [date,       setDate]       = useState(toDateString(new Date()))
-  const [fridge,     setFridge]     = useState<TempSlots>(EMPTY_SLOTS)
-  const [freezer,    setFreezer]    = useState<TempSlots>(EMPTY_SLOTS)
-  const [checkItems, setCheckItems] = useState<CheckItem[]>([])
+  const [activeTab,  setActiveTab]  = useState<TabKey>('temp')
   const [loading,    setLoading]    = useState(true)
+
+  // 温度
+  const [fridge,    setFridge]    = useState<TempSlots>(EMPTY_FRIDGE)
+  const [freezer,   setFreezer]   = useState<TempSlots>(EMPTY_FREEZER)
+  const [tempAssignee, setTempAssignee] = useState('')
+
+  // 各点検
+  const [hazardous, setHazardous] = useState<HazardousCheckData>(defaultHazardous)
+  const [equipment, setEquipment] = useState<EquipmentCheckData>(defaultEquipment)
+  const [cleaning,  setCleaning]  = useState<CleaningCheckData>(defaultCleaning)
 
   useEffect(() => {
     setLoading(true)
     Promise.all([
       fetchTemperatureLog(date),
-      fetchFinalCheckLog(date),
-    ]).then(([tempLog, checkLog]) => {
+      fetchHazardousCheckLog(date),
+      fetchEquipmentCheckLog(date),
+      fetchCleaningCheckLog(date),
+    ]).then(([tempLog, hazLog, eqLog, clLog]) => {
       setFridge(tempLog.fridge)
       setFreezer(tempLog.freezer)
-      setCheckItems(checkLog)
+      setTempAssignee(tempLog.assignee)
+      setHazardous(hazLog)
+      setEquipment(eqLog)
+      setCleaning(clLog)
       setLoading(false)
     }).catch(e => {
       console.error('[ChecksPage] fetch error', e)
@@ -53,7 +100,7 @@ export default function ChecksPage() {
       {/* ── ページヘッダー ── */}
       <div>
         <h1 className="text-xl font-bold text-slate-800">チェックと温度管理</h1>
-        <p className="text-sm text-slate-500 mt-0.5">日次の温度記録と最終点検チェック</p>
+        <p className="text-sm text-slate-500 mt-0.5">日次の温度記録・点検チェック・清掃管理</p>
       </div>
 
       {/* ── 日付セレクター ── */}
@@ -85,24 +132,68 @@ export default function ChecksPage() {
         </button>
       </div>
 
-      {/* ── コンテンツ（ローディング中は非表示） ── */}
+      {/* ── タブ ── */}
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+        {TABS.map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeTab === tab.key
+                ? 'bg-white text-teal-700 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── コンテンツ ── */}
       {loading ? (
         <div className="flex items-center justify-center py-16 text-slate-400">
           <span className="text-sm">読み込み中…</span>
         </div>
       ) : (
         <>
-          <TemperatureCard
-            key={`temp-${date}`}
-            date={date}
-            initialFridge={fridge}
-            initialFreezer={freezer}
-          />
-          <FinalChecklistCard
-            key={`check-${date}`}
-            date={date}
-            initialItems={checkItems}
-          />
+          {/* forceMount 相当: 常時マウントして非アクティブ時は hidden で隠す */}
+          <div className={activeTab !== 'temp' ? 'hidden' : undefined}>
+            <TemperatureCard
+              key={`temp-${date}`}
+              date={date}
+              initialFridge={fridge}
+              initialFreezer={freezer}
+              initialAssignee={tempAssignee}
+            />
+          </div>
+          {activeTab === 'hazardous' && (
+            <HazardousCheckCard
+              key={`hazardous-${date}`}
+              date={date}
+              initialItems={hazardous.items}
+              initialConfirmer={hazardous.confirmer}
+              initialAdminSign={hazardous.adminSign}
+            />
+          )}
+          {activeTab === 'equipment' && (
+            <EquipmentCheckCard
+              key={`equipment-${date}`}
+              date={date}
+              initialItems={equipment.items}
+              initialConfirmer={equipment.confirmer}
+              initialAdminSign={equipment.adminSign}
+            />
+          )}
+          {activeTab === 'cleaning' && (
+            <CleaningCheckCard
+              key={`cleaning-${date}`}
+              date={date}
+              initialItems={cleaning.items}
+              initialAssignee={cleaning.assignee}
+              initialAdminSign={cleaning.adminSign}
+            />
+          )}
         </>
       )}
     </div>

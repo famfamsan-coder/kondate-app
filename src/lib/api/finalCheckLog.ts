@@ -38,7 +38,7 @@ function mergeItems(stored: unknown): CheckItem[] {
 export async function fetchFinalCheckLog(date: string): Promise<CheckItem[]> {
   if (!supabase) return toInitialItems()
   const { data, error } = await supabase
-    .from('FinalCheckLog')
+    .from('finalchecklog')
     .select('items')
     .eq('date', date)
     .maybeSingle()
@@ -56,7 +56,7 @@ export async function upsertFinalCheckLog(
 ): Promise<boolean> {
   if (!supabase) return false
   const { error } = await supabase
-    .from('FinalCheckLog')
+    .from('finalchecklog')
     .upsert(
       { date, items, updated_at: new Date().toISOString() },
       { onConflict: 'date' },

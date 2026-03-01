@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 export async function fetchDailyNotice(date: string): Promise<string> {
   if (!supabase) return ''
   const { data, error } = await supabase
-    .from('DailyNotice')
+    .from('dailynotice')
     .select('content')
     .eq('date', date)
     .maybeSingle()
@@ -19,7 +19,7 @@ export async function fetchDailyNotice(date: string): Promise<string> {
 export async function upsertDailyNotice(date: string, content: string): Promise<boolean> {
   if (!supabase) return false
   const { error } = await supabase
-    .from('DailyNotice')
+    .from('dailynotice')
     .upsert({ date, content }, { onConflict: 'date' })
   if (error) {
     console.error('[upsertDailyNotice]', error.message)
