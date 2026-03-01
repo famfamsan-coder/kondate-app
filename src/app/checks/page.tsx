@@ -2,16 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { TemperatureCard }    from '@/components/checks/TemperatureCard'
-import { HazardousCheckCard } from '@/components/checks/HazardousCheckCard'
+import { TemperatureCard }   from '@/components/checks/TemperatureCard'
 import { EquipmentCheckCard } from '@/components/checks/EquipmentCheckCard'
 import { CleaningCheckCard }  from '@/components/checks/CleaningCheckCard'
-import { fetchTemperatureLog }    from '@/lib/api/temperatureLog'
-import { fetchHazardousCheckLog } from '@/lib/api/hazardousCheckLog'
+import { fetchTemperatureLog }   from '@/lib/api/temperatureLog'
 import { fetchEquipmentCheckLog } from '@/lib/api/equipmentCheckLog'
 import { fetchCleaningCheckLog }  from '@/lib/api/cleaningCheckLog'
 import type { TempSlots }          from '@/lib/api/temperatureLog'
-import type { HazardousCheckData } from '@/lib/api/hazardousCheckLog'
 import type { EquipmentCheckData } from '@/lib/api/equipmentCheckLog'
 import type { CleaningCheckData }  from '@/lib/api/cleaningCheckLog'
 import { toDateString } from '@/lib/utils'
@@ -32,12 +29,11 @@ function formatDateLabel(dateStr: string): string {
 
 // ─── タブ定義 ──────────────────────────────────────────────────────────────
 
-type TabKey = 'temp' | 'hazardous' | 'equipment' | 'cleaning'
+type TabKey = 'temp' | 'equipment' | 'cleaning'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'temp',      label: '温度管理' },
-  { key: 'hazardous', label: '危険物施設点検表' },
-  { key: 'equipment', label: '厨房機器点検表' },
+  { key: 'equipment', label: '設備点検表' },
   { key: 'cleaning',  label: '厨房清掃管理点検表' },
 ]
 
@@ -46,9 +42,6 @@ const TABS: { key: TabKey; label: string }[] = [
 const EMPTY_FRIDGE:  TempSlots = Array(5).fill(null)
 const EMPTY_FREEZER: TempSlots = Array(2).fill(null)
 
-const defaultHazardous = (): HazardousCheckData => ({
-  items: [], confirmer: '', adminSign: '',
-})
 const defaultEquipment = (): EquipmentCheckData => ({
   items: [], confirmer: '', adminSign: '',
 })
@@ -69,7 +62,6 @@ export default function ChecksPage() {
   const [tempAssignee, setTempAssignee] = useState('')
 
   // 各点検
-  const [hazardous, setHazardous] = useState<HazardousCheckData>(defaultHazardous)
   const [equipment, setEquipment] = useState<EquipmentCheckData>(defaultEquipment)
   const [cleaning,  setCleaning]  = useState<CleaningCheckData>(defaultCleaning)
 
@@ -77,14 +69,12 @@ export default function ChecksPage() {
     setLoading(true)
     Promise.all([
       fetchTemperatureLog(date),
-      fetchHazardousCheckLog(date),
       fetchEquipmentCheckLog(date),
       fetchCleaningCheckLog(date),
-    ]).then(([tempLog, hazLog, eqLog, clLog]) => {
+    ]).then(([tempLog, eqLog, clLog]) => {
       setFridge(tempLog.fridge)
       setFreezer(tempLog.freezer)
       setTempAssignee(tempLog.assignee)
-      setHazardous(hazLog)
       setEquipment(eqLog)
       setCleaning(clLog)
       setLoading(false)
@@ -167,15 +157,6 @@ export default function ChecksPage() {
               initialAssignee={tempAssignee}
             />
           </div>
-          {activeTab === 'hazardous' && (
-            <HazardousCheckCard
-              key={`hazardous-${date}`}
-              date={date}
-              initialItems={hazardous.items}
-              initialConfirmer={hazardous.confirmer}
-              initialAdminSign={hazardous.adminSign}
-            />
-          )}
           {activeTab === 'equipment' && (
             <EquipmentCheckCard
               key={`equipment-${date}`}
