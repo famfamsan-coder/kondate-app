@@ -3,48 +3,33 @@
 import { useState, useRef } from 'react'
 import { CheckCircle2, Circle, Loader2, Printer } from 'lucide-react'
 import { VoiceInputButton } from '@/components/ui/VoiceInputButton'
-import { SignaturePad } from '@/components/ui/SignaturePad'
 import { upsertCleaningCheckLog } from '@/lib/api/cleaningCheckLog'
 import type { CheckItem } from '@/lib/api/finalCheckLog'
 
 type SaveStatus = 'idle' | 'saving' | 'saved'
 
 interface Props {
-  date:             string
-  initialItems:     CheckItem[]
-  initialAssignee:  string
-  initialAdminSign: string
+  date:            string
+  initialItems:    CheckItem[]
+  initialAssignee: string
 }
 
-export function CleaningCheckCard({
-  date,
-  initialItems,
-  initialAssignee,
-  initialAdminSign,
-}: Props) {
+export function CleaningCheckCard({ date, initialItems, initialAssignee }: Props) {
   const [items,      setItems]      = useState<CheckItem[]>(initialItems)
   const [assignee,   setAssignee]   = useState(initialAssignee)
-  const [adminSign,  setAdminSign]  = useState(initialAdminSign)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
 
-  const assigneeRef   = useRef(assignee)
-  const adminSignRef  = useRef(adminSign)
-  const itemsRef      = useRef(items)
-  assigneeRef.current  = assignee
-  adminSignRef.current = adminSign
-  itemsRef.current     = items
+  const assigneeRef = useRef(assignee)
+  const itemsRef    = useRef(items)
+  assigneeRef.current = assignee
+  itemsRef.current    = items
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const save = async () => {
     setSaveStatus('saving')
     try {
-      await upsertCleaningCheckLog(
-        date,
-        itemsRef.current,
-        assigneeRef.current,
-        adminSignRef.current,
-      )
+      await upsertCleaningCheckLog(date, itemsRef.current, assigneeRef.current, '')
       setSaveStatus('saved')
       if (savedTimer.current) clearTimeout(savedTimer.current)
       savedTimer.current = setTimeout(() => setSaveStatus('idle'), 2000)
@@ -66,12 +51,6 @@ export function CleaningCheckCard({
   const handleAssigneeChange = (v: string) => {
     setAssignee(v)
     assigneeRef.current = v
-    save()
-  }
-
-  const handleAdminSignChange = (v: string) => {
-    setAdminSign(v)
-    adminSignRef.current = v
     save()
   }
 
@@ -104,7 +83,6 @@ export function CleaningCheckCard({
               <CheckCircle2 className="w-3 h-3" />保存済み
             </span>
           )}
-          {/* 印刷ボタン */}
           <button
             type="button"
             onClick={() => window.print()}
@@ -116,7 +94,6 @@ export function CleaningCheckCard({
         </div>
       </div>
 
-      {/* 印刷用日付ヘッダー（印刷時のみ表示） */}
       <div className="hidden print:block text-sm text-slate-600 border-b pb-2">
         実施日：{date}
       </div>
@@ -158,16 +135,12 @@ export function CleaningCheckCard({
           />
           <VoiceInputButton onResult={text => handleAssigneeChange(text)} title="担当者名を音声入力" />
         </div>
-        {/* 候補リスト（施設に合わせて編集してください） */}
         <datalist id="cleaning-assignee-list">
           <option value="担当者A" />
           <option value="担当者B" />
           <option value="担当者C" />
         </datalist>
       </div>
-
-      {/* ── 管理者サイン ── */}
-      <SignaturePad value={adminSign} onChange={handleAdminSignChange} />
     </div>
   )
 }

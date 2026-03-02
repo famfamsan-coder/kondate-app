@@ -7,8 +7,9 @@ import { CheckStatusBanner } from '@/components/dashboard/CheckStatusBanner'
 import { fetchMenuItemsByDateRange, fetchRecentMenuItems, fetchMenuItemsWithComments } from '@/lib/api/menuItems'
 import { fetchOodas } from '@/lib/api/ooda'
 import { fetchDailyNotice } from '@/lib/api/dailyNotice'
-import { fetchTemperatureLog } from '@/lib/api/temperatureLog'
-import { fetchFinalCheckLog } from '@/lib/api/finalCheckLog'
+import { fetchTemperatureLog }   from '@/lib/api/temperatureLog'
+import { fetchEquipmentCheckLog } from '@/lib/api/equipmentCheckLog'
+import { fetchCleaningCheckLog }  from '@/lib/api/cleaningCheckLog'
 import { toDateString } from '@/lib/utils'
 import type { MenuItem } from '@/lib/types'
 
@@ -36,7 +37,7 @@ export default async function DashboardPage() {
 
   const [
     recentMenuItems, next3MenuItems, allOodas, fieldNoteItems,
-    noticeContent, tempLog, checkLog,
+    noticeContent, tempLog, eqLog, clLog,
   ] = await Promise.all([
     fetchRecentMenuItems(20),
     fetchMenuItemsByDateRange(next3Dates[0], next3Dates[next3Dates.length - 1]),
@@ -44,12 +45,15 @@ export default async function DashboardPage() {
     fetchMenuItemsWithComments(15),
     fetchDailyNotice(today),
     fetchTemperatureLog(today),
-    fetchFinalCheckLog(today),
+    fetchEquipmentCheckLog(today),
+    fetchCleaningCheckLog(today),
   ])
 
   const fridgeMissing  = tempLog.fridge.filter(v => v === null).length
   const freezerMissing = tempLog.freezer.filter(v => v === null).length
-  const uncheckedItems = checkLog.filter(i => !i.checked).length
+  const uncheckedItems =
+    eqLog.items.filter(i => !i.checked).length +
+    clLog.items.filter(i => !i.checked).length
 
   const todayItems     = next3MenuItems.filter(m => m.date === today)
   const todayTotalTime = calcTotalTime(todayItems)

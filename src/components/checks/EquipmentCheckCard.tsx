@@ -3,7 +3,6 @@
 import { useState, useRef } from 'react'
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react'
 import { VoiceInputButton } from '@/components/ui/VoiceInputButton'
-import { SignaturePad } from '@/components/ui/SignaturePad'
 import { upsertEquipmentCheckLog } from '@/lib/api/equipmentCheckLog'
 import type { CheckItem } from '@/lib/api/finalCheckLog'
 
@@ -13,38 +12,24 @@ interface Props {
   date:             string
   initialItems:     CheckItem[]
   initialConfirmer: string
-  initialAdminSign: string
 }
 
-export function EquipmentCheckCard({
-  date,
-  initialItems,
-  initialConfirmer,
-  initialAdminSign,
-}: Props) {
+export function EquipmentCheckCard({ date, initialItems, initialConfirmer }: Props) {
   const [items,      setItems]      = useState<CheckItem[]>(initialItems)
   const [confirmer,  setConfirmer]  = useState(initialConfirmer)
-  const [adminSign,  setAdminSign]  = useState(initialAdminSign)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
 
-  const confirmerRef   = useRef(confirmer)
-  const adminSignRef   = useRef(adminSign)
-  const itemsRef       = useRef(items)
-  confirmerRef.current  = confirmer
-  adminSignRef.current  = adminSign
-  itemsRef.current      = items
+  const confirmerRef = useRef(confirmer)
+  const itemsRef     = useRef(items)
+  confirmerRef.current = confirmer
+  itemsRef.current     = items
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const save = async () => {
     setSaveStatus('saving')
     try {
-      await upsertEquipmentCheckLog(
-        date,
-        itemsRef.current,
-        confirmerRef.current,
-        adminSignRef.current,
-      )
+      await upsertEquipmentCheckLog(date, itemsRef.current, confirmerRef.current, '')
       setSaveStatus('saved')
       if (savedTimer.current) clearTimeout(savedTimer.current)
       savedTimer.current = setTimeout(() => setSaveStatus('idle'), 2000)
@@ -69,12 +54,6 @@ export function EquipmentCheckCard({
     save()
   }
 
-  const handleAdminSignChange = (v: string) => {
-    setAdminSign(v)
-    adminSignRef.current = v
-    save()
-  }
-
   const checkedCount = items.filter(i => i.checked).length
   const allChecked   = checkedCount === items.length
 
@@ -84,7 +63,7 @@ export function EquipmentCheckCard({
       {/* ── ヘッダー ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-wrap">
-          <h2 className="font-bold text-slate-700">🍳 厨房機器点検表</h2>
+          <h2 className="font-bold text-slate-700">🍳 設備点検表</h2>
           <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
             allChecked
               ? 'bg-emerald-100 text-emerald-700'
@@ -144,9 +123,6 @@ export function EquipmentCheckCard({
           <VoiceInputButton onResult={text => handleConfirmerChange(text)} title="確認者を音声入力" />
         </div>
       </div>
-
-      {/* ── 管理者サイン ── */}
-      <SignaturePad value={adminSign} onChange={handleAdminSignChange} />
     </div>
   )
 }

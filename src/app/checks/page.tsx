@@ -163,7 +163,6 @@ export default function ChecksPage() {
               date={date}
               initialItems={equipment.items}
               initialConfirmer={equipment.confirmer}
-              initialAdminSign={equipment.adminSign}
             />
           )}
           {activeTab === 'cleaning' && (
@@ -172,7 +171,6 @@ export default function ChecksPage() {
               date={date}
               initialItems={cleaning.items}
               initialAssignee={cleaning.assignee}
-              initialAdminSign={cleaning.adminSign}
             />
           )}
         </>
