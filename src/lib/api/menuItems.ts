@@ -152,3 +152,35 @@ export async function deleteMenuItem(id: string): Promise<boolean> {
 }
 
 // bulkInsertMenuItems は csv-import/actions.ts の Server Action に移行したため削除済み
+
+/**
+ * 指定メニュー名リストのうち、指定日付より前に改善メモが入力されている MenuItem を取得。
+ * menu_name ごとに最新1件のみ返す（前回の改善メモ引き継ぎ用）。
+ */
+export async function fetchPreviousCommentsByMenuNames(
+  menuNames: string[],
+  beforeDate: string,
+): Promise<MenuItem[]> {
+  if (!supabase || menuNames.length === 0) return []
+  const { data, error } = await supabase
+    .from('MenuItem')
+    .select('*')
+    .in('menu_name', menuNames)
+    .lt('date', beforeDate)
+    .neq('comment', '')
+    .order('date', { ascending: false })
+    .limit(menuNames.length * 5) // menu_name ごとに最新1件を拾うための余裕
+  if (error) { console.error('[fetchPreviousCommentsByMenuNames]', error.message); return [] }
+
+  // menu_name ごとに最新1件のみ残す
+  const seen = new Set<string>()
+  const result: MenuItem[] = []
+  for (const row of (data ?? [])) {
+    const item = mapRow(row as Record<string, unknown>)
+    if (!seen.has(item.menu_name)) {
+      seen.add(item.menu_name)
+      result.push(item)
+    }
+  }
+  return result
+}

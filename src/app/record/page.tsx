@@ -5,6 +5,7 @@ import { Plus, Trash2, Loader2, CheckCircle2, Clock } from 'lucide-react'
 import { StarRating } from '@/components/record/StarRating'
 import {
   fetchMenuItemsByDate,
+  fetchPreviousCommentsByMenuNames,
   insertMenuItem,
   updateMenuItemTimes,
   updateMenuItemComment,
@@ -53,18 +54,22 @@ function totalMinutes(item: MenuItem): number {
 
 function MenuItemRow({
   item,
+  prevComment,
+  prevCommentDate,
   onTimeChange,
   onDelete,
   onCommentChange,
   saveStatus,
   commentStatus,
 }: {
-  item:            MenuItem
-  onTimeChange:    (id: string, key: TimeKey, minutes: number) => void
-  onDelete:        (id: string) => void
-  onCommentChange: (id: string, comment: string) => void
-  saveStatus:      SaveStatus
-  commentStatus:   SaveStatus
+  item:             MenuItem
+  prevComment?:     string
+  prevCommentDate?: string
+  onTimeChange:     (id: string, key: TimeKey, minutes: number) => void
+  onDelete:         (id: string) => void
+  onCommentChange:  (id: string, comment: string) => void
+  saveStatus:       SaveStatus
+  commentStatus:    SaveStatus
 }) {
   const [oodaStatus, setOodaStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
 
@@ -137,6 +142,19 @@ function MenuItemRow({
       </div>
 
       <div className="bg-white px-4 py-3 space-y-3">
+        {/* 前回の改善メモ（同名メニューの過去記録から引き継ぎ） */}
+        {prevComment && (
+          <div className="bg-sky-50 border border-sky-200 rounded-xl px-3 py-2">
+            <p className="text-xs font-semibold text-sky-700 mb-0.5">
+              前回の改善メモ
+              {prevCommentDate && (
+                <span className="ml-1 font-normal text-sky-500">（{prevCommentDate}）</span>
+              )}
+            </p>
+            <p className="text-xs text-sky-800 leading-relaxed whitespace-pre-wrap">{prevComment}</p>
+          </div>
+        )}
+
         {/* 注意事項（マニュアルメモ） */}
         {item.note && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
@@ -229,6 +247,9 @@ export default function RecordPage() {
   const [adding,   setAdding]   = useState(false)
   const [saveStatuses,    setSaveStatuses]    = useState<Record<string, SaveStatus>>({})
   const [commentStatuses, setCommentStatuses] = useState<Record<string, SaveStatus>>({})
+  // menu_name → { comment, date } の前回改善メモマップ
+  const [prevCommentMap, setPrevCommentMap] = useState<Record<string, { comment: string; date: string }>>({})
+
 
   // debounce タイマー管理（key = item.id or `${item.id}_comment`）
   const timers   = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
@@ -284,10 +305,23 @@ export default function RecordPage() {
       if (cancelled) return
       setSaveStatuses({})
       setCommentStatuses({})
+      setPrevCommentMap({})
       setLoading(true)
       setItems([])
       const data = await fetchMenuItemsByDate(date, mealType)
-      if (!cancelled) { setItems(sortMenuItems(data)); setLoading(false) }
+      if (cancelled) return
+      setItems(sortMenuItems(data)); setLoading(false)
+
+      // 同名メニューの前回改善メモを取得
+      const names = data.map(m => m.menu_name).filter(Boolean)
+      if (names.length > 0) {
+        const prevItems = await fetchPreviousCommentsByMenuNames(names, date)
+        if (!cancelled) {
+          const map: Record<string, { comment: string; date: string }> = {}
+          for (const p of prevItems) map[p.menu_name] = { comment: p.comment, date: p.date }
+          setPrevCommentMap(map)
+        }
+      }
     })()
     return () => { cancelled = true }
   }, [date, mealType, flushPendingSaves])
@@ -439,6 +473,8 @@ export default function RecordPage() {
               <MenuItemRow
                 key={item.id}
                 item={item}
+                prevComment={prevCommentMap[item.menu_name]?.comment}
+                prevCommentDate={prevCommentMap[item.menu_name]?.date}
                 onTimeChange={handleTimeChange}
                 onDelete={handleDelete}
                 onCommentChange={handleCommentChange}

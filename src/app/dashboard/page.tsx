@@ -4,7 +4,8 @@ import { DashboardClientTop } from '@/components/dashboard/DashboardClientTop'
 import { FieldNotes } from '@/components/dashboard/FieldNotes'
 import { DailyNoticeCard } from '@/components/dashboard/DailyNoticeCard'
 import { CheckStatusBanner } from '@/components/dashboard/CheckStatusBanner'
-import { fetchMenuItemsByDateRange, fetchRecentMenuItems, fetchMenuItemsWithComments } from '@/lib/api/menuItems'
+import { TodayPrevComments } from '@/components/dashboard/TodayPrevComments'
+import { fetchMenuItemsByDateRange, fetchRecentMenuItems, fetchMenuItemsWithComments, fetchPreviousCommentsByMenuNames } from '@/lib/api/menuItems'
 import { fetchOodas } from '@/lib/api/ooda'
 import { fetchDailyNotice } from '@/lib/api/dailyNotice'
 import { fetchTemperatureLog }   from '@/lib/api/temperatureLog'
@@ -49,13 +50,16 @@ export default async function DashboardPage() {
     fetchCleaningCheckLog(today),
   ])
 
+  const todayItems = next3MenuItems.filter(m => m.date === today)
+  const todayMenuNames = [...new Set(todayItems.map(m => m.menu_name).filter(Boolean))]
+  const todayPrevComments = await fetchPreviousCommentsByMenuNames(todayMenuNames, today)
+
   const fridgeMissing  = tempLog.fridge.filter(v => v === null).length
   const freezerMissing = tempLog.freezer.filter(v => v === null).length
   const uncheckedItems =
     eqLog.items.filter(i => !i.checked).length +
     clLog.items.filter(i => !i.checked).length
 
-  const todayItems     = next3MenuItems.filter(m => m.date === today)
   const todayTotalTime = calcTotalTime(todayItems)
   const todayMealCount = todayItems.length
 
@@ -77,6 +81,20 @@ export default async function DashboardPage() {
         freezerMissing={freezerMissing}
         uncheckedItems={uncheckedItems}
       />
+
+      {/* ── 【優先0c】本日気をつけること（前回の改善メモ） ── */}
+      {todayPrevComments.length > 0 && (
+        <div className="bg-white rounded-2xl border border-sky-200 shadow-sm p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="font-bold text-slate-700">本日気をつけること</h2>
+            <span className="text-xs bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-semibold">
+              {todayPrevComments.length} 件
+            </span>
+            <span className="text-xs text-slate-400 ml-auto">（前回同メニューの改善メモより）</span>
+          </div>
+          <TodayPrevComments todayItems={todayItems} prevComments={todayPrevComments} />
+        </div>
+      )}
 
       {/* ── 【優先1】KPI + 安全セクション（クライアント, state 連動） ── */}
       <DashboardClientTop
